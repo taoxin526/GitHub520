@@ -1,10 +1,12 @@
 # GitHub520
 <p align="center">
-  <img src="https://vip1.loli.net/2020/05/19/fLSBE29NxoFtOcd.gif"/>
+  <img src="https://cdn.jsdelivr.net/gh/521xueweihan/img_logo@main/logo/readme.gif"/>
   <br><strong><a href="https://github.com/521xueweihan/HelloGitHub" target="_blank">HelloGitHub</a></strong> 分享 GitHub 上有趣、入门级的开源项目。<br>兴趣是最好的老师，这里能够帮你找到编程的兴趣！
 </p>
 
-有问题可以来[「HelloGitHub 视频号」](https://static.hellogithub.com/5y/img/v.jpeg)问我，不定期直播。
+[raw.hellogithub.com](https://raw.hellogithub.com/) 服务器续费了 3 年到 2024.12 共花了：1500+💰
+
+有余粮的朋友[点击扫码赞助](https://cdn.jsdelivr.net/gh/521xueweihan/img_logo@main/logo/receiving_code.png)，感谢🙏
 
 ## 一、介绍
 对 GitHub 说"爱"太难了：访问慢、图片加载不出来。
@@ -52,7 +54,7 @@ hosts 文件在每个系统的位置不一，详情如下：
 
 1. Windows：在 CMD 窗口输入：`ipconfig /flushdns`
 
-2. Linux 命令：`sudo nscd restart`，如报错则须安装：`sudo apt install nscd`
+2. Linux 命令：`sudo nscd restart`，如报错则须安装：`sudo apt install nscd` 或 `sudo /etc/init.d/nscd restart`
 
 3. Mac 命令：`sudo killall -HUP mDNSResponder`
 
@@ -78,7 +80,12 @@ hosts 文件在每个系统的位置不一，详情如下：
 
 这样每次 hosts 有更新都能及时进行更新，免去手动更新。
 
-### 2.3 AdGuard Home 用户（自动方式）
+### 2.3 One-liner (适用于类Unix系统)
+
+`sed -i "/# GitHub520 Host Start/Q" /etc/hosts && curl https://raw.hellogithub.com/hosts >> /etc/hosts`
+自动更新`/etc/hosts`文件，可以添加到cron定时执行。使用前确保Github520内容在该文件最后部分。
+
+### 2.4 AdGuard Home 用户（自动方式）
 
 在 **过滤器>DNS 封锁清单>添加阻止列表>添加一个自定义列表**，配置如下：
 
@@ -96,7 +103,7 @@ hosts 文件在每个系统的位置不一，详情如下：
 
 **Tip**：不要添加在 **DNS 允许清单** 内，只能添加在 **DNS 封锁清单** 才管用。另外，AdGuard for Mac、AdGuard for Windows、AdGuard for Android、AdGuard for IOS 等等 **AdGuard 家族软件** 添加方法均类似。
 
-### 2.4 Chrome 插件方式
+### 2.5 Chrome 插件方式
 
 [FasterHosts](https://github.com/gauseen/faster-hosts) 是个 Chrome 插件，主要原理是拦截浏览器的某些请求，将 `domain` 替换成访问速度较快的那个。hosts 资源来自 [GitHub520](https://github.com/521xueweihan/GitHub520)，每 1 小时更新一次。
 
