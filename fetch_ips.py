@@ -5,185 +5,179 @@
 #   E-mail  :   595666367@qq.com
 #   Date    :   2020-05-19 15:27
 #   Desc    :   获取最新的 GitHub 相关域名对应 IP
-import os
-import re
-import json
-import traceback
-
-from datetime import datetime, timezone, timedelta
-from collections import Counter
+from typing import Any, Dict, List, Optional
+from datetime import datetime
+import socket
+import time
+import sys
+import asyncio
+import aiodns
 
 import requests
 from retry import retry
 
-RAW_URL = [
-    "alive.github.com",
-    "live.github.com",
-    "github.githubassets.com",
-    "central.github.com",
-    "desktop.githubusercontent.com",
-    "assets-cdn.github.com",
-    "camo.githubusercontent.com",
-    "github.map.fastly.net",
-    "github.global.ssl.fastly.net",
-    "gist.github.com",
-    "github.io",
-    "github.com",
-    "github.blog",
-    "api.github.com",
-    "raw.githubusercontent.com",
-    "user-images.githubusercontent.com",
-    "favicons.githubusercontent.com",
-    "avatars5.githubusercontent.com",
-    "avatars4.githubusercontent.com",
-    "avatars3.githubusercontent.com",
-    "avatars2.githubusercontent.com",
-    "avatars1.githubusercontent.com",
-    "avatars0.githubusercontent.com",
-    "avatars.githubusercontent.com",
-    "codeload.github.com",
-    "github-cloud.s3.amazonaws.com",
-    "github-com.s3.amazonaws.com",
-    "github-production-release-asset-2e65be.s3.amazonaws.com",
-    "github-production-user-asset-6210df.s3.amazonaws.com",
-    "github-production-repository-file-5c1aeb.s3.amazonaws.com",
-    "githubstatus.com",
-    "github.community",
-    "github.dev",
-    "collector.github.com",
-    "pipelines.actions.githubusercontent.com",
-    "media.githubusercontent.com",
-    "cloud.githubusercontent.com",
-    "objects.githubusercontent.com",
-    "vscode.dev"]
-
-IPADDRESS_PREFIX = ".ipaddress.com"
-
-HOSTS_TEMPLATE = """# GitHub520 Host Start
-{content}
-
-# Update time: {update_time}
-# Update url: https://raw.hellogithub.com/hosts
-# Star me: https://github.com/521xueweihan/GitHub520
-# GitHub520 Host End\n"""
+from common import GITHUB_URLS, write_hosts_content
 
 
-def write_file(hosts_content: str, update_time: str):
-    output_doc_file_path = os.path.join(os.path.dirname(__file__), "README.md")
-    template_path = os.path.join(os.path.dirname(__file__),
-                                 "README_template.md")
-    write_host_file(hosts_content)
-    if os.path.exists(output_doc_file_path):
-        with open(output_doc_file_path, "r") as old_readme_fb:
-            old_content = old_readme_fb.read()
-            old_hosts = old_content.split("```bash")[1].split("```")[0].strip()
-            old_hosts = old_hosts.split("# Update time:")[0].strip()
-            hosts_content_hosts = hosts_content.split("# Update time:")[0].strip()
-        if old_hosts == hosts_content_hosts:
-            print("host not change")
-            return False
-
-    with open(template_path, "r") as temp_fb:
-        template_str = temp_fb.read()
-        hosts_content = template_str.format(hosts_str=hosts_content,
-                                            update_time=update_time)
-        with open(output_doc_file_path, "w") as output_fb:
-            output_fb.write(hosts_content)
-    return True
+PING_TIMEOUT_SEC: int = 1
+HTTPS_PORT: int = 443
+DISCARD_LIST: List[str] = ["1.0.1.1", "1.2.1.1", "127.0.0.1"]
 
 
-def write_host_file(hosts_content: str):
-    output_file_path = os.path.join(os.path.dirname(__file__), 'hosts')
-    with open(output_file_path, "w") as output_fb:
-        output_fb.write(hosts_content)
+PING_LIST: Dict[str, int] = dict()
 
 
-def write_json_file(hosts_list: list):
-    output_file_path = os.path.join(os.path.dirname(__file__), 'hosts.json')
-    with open(output_file_path, "w") as output_fb:
-        json.dump(hosts_list, output_fb)
+def ping_cached(ip: str) -> int:
+    """通过 TCP 连接 443 端口测速（毫秒），更能反映国内 HTTPS 实际可用性，且无需 root 权限"""
+    global PING_LIST
+    if ip in PING_LIST:
+        return PING_LIST[ip]
+    latencies = []
+    for _ in range(3):
+        try:
+            start = time.time()
+            with socket.create_connection((ip, HTTPS_PORT), timeout=PING_TIMEOUT_SEC):
+                latencies.append((time.time() - start) * 1000)
+        except Exception:
+            # 连接失败按超时处理
+            latencies.append(PING_TIMEOUT_SEC * 1000)
+    latencies.sort()
+    print(f'TCP ping {ip}:{HTTPS_PORT}: {latencies} ms')
+    PING_LIST[ip] = latencies[1]  # 取中位数
+    return PING_LIST[ip]
 
 
-def make_ipaddress_url(raw_url: str):
-    """
-    生成 ipaddress 对应的 url
-    :param raw_url: 原始 url
-    :return: ipaddress 的 url
-    """
-    dot_count = raw_url.count(".")
-    if dot_count > 1:
-        raw_url_list = raw_url.split(".")
-        tmp_url = raw_url_list[-2] + "." + raw_url_list[-1]
-        ipaddress_url = "https://" + tmp_url + IPADDRESS_PREFIX + "/" + raw_url
-    else:
-        ipaddress_url = "https://" + raw_url + IPADDRESS_PREFIX
-    return ipaddress_url
+def select_ip_from_list(ip_list: List[str]) -> Optional[str]:
+    if len(ip_list) == 0:
+        return None
+    ping_results = [(ip, ping_cached(ip)) for ip in ip_list]
+    ping_results.sort(key=lambda x: x[1])
+    best_ip = ping_results[0][0]
+    print(f"{ping_results}, selected {best_ip}")
+    return best_ip
+
+
+DOH_SERVERS = [
+    "https://dns.alidns.com/resolve",       # 阿里 DoH（国内视角）
+    "https://doh.pub/dns-query",            # DNSPod DoH（国内视角）
+    "https://dns.google/resolve",           # Google DoH（备用）
+]
 
 
 @retry(tries=3)
-def get_ip(session: requests.session, raw_url: str):
-    url = make_ipaddress_url(raw_url)
+def get_ip_list_from_doh(domain: str) -> List[str]:
+    """通过 DNS over HTTPS (DoH) 查询域名的 A 记录，优先使用国内 DoH 服务器"""
+    for doh_url in DOH_SERVERS:
+        try:
+            rs = requests.get(
+                doh_url,
+                params={"name": domain, "type": "A"},
+                headers={"Accept": "application/dns-json"},
+                timeout=5,
+            )
+            data = rs.json()
+            if data.get("Status") == 0 and "Answer" in data:
+                ip_list = [r["data"] for r in data["Answer"] if r.get("type") == 1]
+                if ip_list:
+                    print(f"DoH {doh_url} -> {domain}: {ip_list}")
+                    return ip_list
+        except Exception as ex:
+            print(f"DoH query {doh_url} for {domain} failed: {ex}")
+    raise Exception(f"All DoH servers failed for {domain}")
+
+
+DNS_SERVER_LIST = [
+    "114.114.114.114",  # 114 DNS（国内）
+    "223.5.5.5",        # 阿里 DNS（国内）
+    "119.29.29.29",     # 腾讯 DNS（国内）
+    "1.1.1.1",          # Cloudflare（备用）
+    "8.8.8.8",          # Google（备用）
+]
+
+
+def windows_compatibility_check():
+    if sys.platform == "win32":
+        # 检查 pycares 是否正常加载
+        try:
+            import pycares
+        except ImportError:
+            raise RuntimeError("请先执行 'pip install pycares'")
+
+
+async def get_ip_list_from_dns(
+    domain,
+    record_type="A",
+    dns_server_list=["1.2.4.8", "114.114.114.114"],
+):
+    # Windows 兼容性检查
+    windows_compatibility_check()
+
+    # 配置 DNS 服务器
+    resolver = aiodns.DNSResolver()
+    resolver.nameservers = dns_server_list
+
     try:
-        rs = session.get(url, timeout=5)
-        pattern = r"\b(?:[0-9]{1,3}\.){3}[0-9]{1,3}\b"
-        ip_list = re.findall(pattern, rs.text)
-        ip_counter_obj = Counter(ip_list).most_common(1)
-        if ip_counter_obj:
-            return raw_url, ip_counter_obj[0][0]
-        raise Exception("ip address empty")
+        # 执行异步查询
+        result = await resolver.query(domain, record_type)
+        return [answer.host for answer in result]
+    except aiodns.error.DNSError as e:
+        print(f"{domain}: DNS 查询失败: {e}")
+        return []
+
+
+async def get_ip(session: Any, github_url: str) -> Optional[str]:
+    ip_list_doh = []
+    try:
+        ip_list_doh = get_ip_list_from_doh(github_url)
+    except Exception:
+        pass
+    ip_list_dns = []
+    try:
+        ip_list_dns = await get_ip_list_from_dns(github_url, dns_server_list=DNS_SERVER_LIST)
     except Exception as ex:
-        print("get: {}, error: {}".format(url, ex))
-        raise Exception
+        pass
+    ip_list_set = set(ip_list_doh + ip_list_dns)
+    for discard_ip in DISCARD_LIST:
+        ip_list_set.discard(discard_ip)
+    ip_list = list(ip_list_set)
+    ip_list.sort()
+    if len(ip_list) == 0:
+        return None
+    print(f"{github_url}: {ip_list}")
+    best_ip = select_ip_from_list(ip_list)
+    return best_ip
 
 
-@retry(tries=3)
-def update_gitee_gist(session: requests.session, host_content):
-    gitee_token = os.getenv("gitee_token")
-    gitee_gist_id = os.getenv("gitee_gist_id")
-    gist_file_name = os.getenv("gitee_gist_file_name")
-    url = "https://gitee.com/api/v5/gists/{}".format(gitee_gist_id)
-    headers = {
-        "Content-Type": "application/json"}
-    data = {
-        "access_token": gitee_token,
-        "files": {gist_file_name: {"content": host_content}},
-        "public": "true"}
-    json_data = json.dumps(data)
-    try:
-        response = session.patch(url, data=json_data, headers=headers,
-                                 timeout=20)
-        if response.status_code == 200:
-            print("update gitee gist success")
-        else:
-            print("update gitee gist fail: {} {}".format(response.status_code,
-                                                         response.content))
-    except Exception as e:
-        traceback.print_exc(e)
-        raise Exception(e)
-
-
-def main():
-    session = requests.session()
+async def main() -> None:
+    current_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    print(f'{current_time} - Start script.')
+    session = requests.Session()
     content = ""
     content_list = []
-    for raw_url in RAW_URL:
+    for index, github_url in enumerate(GITHUB_URLS):
+        print(f'Start Processing url: {index + 1}/{len(GITHUB_URLS)}, {github_url}')
         try:
-            host_name, ip = get_ip(session, raw_url)
-            content += ip.ljust(30) + host_name + "\n"
-            content_list.append((ip, host_name,))
+            ip = await get_ip(session, github_url)
+            if ip is None:
+                print(f"{github_url}: IP Not Found")
+                ip = "# IP Address Not Found"
+            content += ip.ljust(30) + github_url
+            global PING_LIST
+            if PING_LIST.get(ip) is not None and PING_LIST.get(ip) == PING_TIMEOUT_SEC * 1000:
+                content += "  # Timeout"
+            content += "\n"
+            content_list.append((ip, github_url,))
         except Exception:
             continue
 
-    if not content:
-        return
-    update_time = datetime.utcnow().astimezone(
-        timezone(timedelta(hours=8))).replace(microsecond=0).isoformat()
-    hosts_content = HOSTS_TEMPLATE.format(content=content, update_time=update_time)
-    has_change = write_file(hosts_content, update_time)
-    if has_change:
-        write_json_file(content_list)
-    print(hosts_content)
+    write_hosts_content(content, content_list)
+    # print(hosts_content)
+    current_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    print(f'{current_time} - End script.')
 
 
-if __name__ == '__main__':
-    main()
+if __name__ == "__main__":
+    if sys.platform == "win32":
+        # Windows 事件循环策略配置
+        asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+    asyncio.run(main())
